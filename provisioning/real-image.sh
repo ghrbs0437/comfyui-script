@@ -33,7 +33,10 @@ DIFFUSION_MODELS=(
 )
 
 TEXT_ENCODER_MODELS=(
+    # Krea2 CLIPLoader (type = krea2)
     "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_bf16.safetensors"
+    # PiD subgraph CLIPLoader (type = pixeldit) - Gemma-2-2B text encoder for PixelDiT
+    "https://huggingface.co/Comfy-Org/PixelDiT/resolve/main/text_encoders/gemma_2_2b_it_elm_bf16.safetensors"
 )
 
 LORA_MODELS=(

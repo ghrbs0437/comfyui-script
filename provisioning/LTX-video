@@ -1,23 +1,13 @@
 #!/bin/bash
 # This file will be sourced in init.sh
-# 목적: Wan 2.2 SVI Pro + LTX-2.3 하이브리드 비디오 파이프라인 프로비저닝
-#   (원본: mp4 임베드 워크플로우 → comfy-lab/references/wan22svi-ltx23-hybrid.ui.json)
+# 목적: Wan 2.2 SVI Pro + LTX-2.3 하이브리드 비디오 파이프라인 프로비저닝 (v2)
 #
-# 파이프라인: 이미지 → Wan2.2 SVI 세그먼트 I2V → 2x 업스케일 → RIFE 보간 → LTX-2.3 v2v+오디오
 #
 # 필요 환경변수:
-#   HF_TOKEN      — 필수 아님 (아래 HF 파일은 전부 공개)
-#   CIVITAI_TOKEN — 필수. Dasiwa 모델(NSFW 게이트)은 토큰 없이 다운로드가 거부된다.
+#   CIVITAI_TOKEN — 필수 (Dasiwa·LoRA 다수가 NSFW 게이트)
+#   HF_TOKEN      — 선택 (아래 HF 파일은 전부 공개)
 #
-# 디스크 요구량: 모델 합계 약 100 GB (여유 포함 120 GB 권장)
-#
-# ⚠ 원본 워크플로우는 Windows에서 저장되어 모델 경로가 "Wan2.2\Dasiwa\..." 식의
-#   하위폴더+백슬래시다. 이 스크립트는 표준 폴더에 평평하게 받으므로, 워크플로우를
-#   처음 열면 로더 노드들의 모델을 드롭다운에서 한 번씩 재선택해야 한다 (파일명은 동일).
-#
-# ⚠ 수동 준비 2건 (아래 검색으로 못 찾음 — 링크를 직접 채울 것):
-#   1) LORA_MODELS의 "Big-breasted shakes" high/low (Civitai NSFW LoRA)
-#   2) LoadImage 입력 이미지는 별도 업로드
+# 디스크: 모델 합계 약 105 GB → 120 GB 이상 할당 권장
 
 APT_PACKAGES=(
 )
@@ -42,67 +32,53 @@ NODES=(
     "https://github.com/TinyTerra/ComfyUI_tinyterraNodes"
     "https://github.com/ssitu/ComfyUI_UltimateSDUpscale"
 )
+# 전 저장소 존재 확인함 (2026-07-21, GitHub API 200)
 
-CHECKPOINT_MODELS=(
+# "카테고리/하위폴더|URL" — 워크플로우 로더 값과 정확히 같은 트리로 받는다.
+# 카테고리는 ai-dock storage 이름 기준 (unet, lora, vae, esrgan). storage가 통째로
+# ComfyUI models에 링크되므로 하위폴더도 그대로 보인다.
+STORAGE_MODEL_ITEMS=(
+    # --- diffusion (unet) ---
+    "unet/Wan2.2/Dasiwa|https://civitai.com/api/download/models/2761725"
+    "unet/Wan2.2/Dasiwa|https://civitai.com/api/download/models/2761870"
+    "unet/Wan2.2|https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+    "unet/LTX2.3/Kijai|https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/diffusion_models/ltx-2-3-22b-dev_transformer_only_fp8_input_scaled.safetensors"
+    # --- lora ---
+    "lora/Wan2.2/SVI2|https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors"
+    "lora/Wan2.2/SVI2|https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_LOW_lora_rank_128_fp16.safetensors"
+    "lora/Wan2.2/LightningX2V/rCM|https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/rCM/Wan22-I2V-A14B-HIGH-rCM6_0_lora_rank_64_bf16.safetensors"
+    "lora/LTX2.3|https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
+    "lora/LTX2.3|https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/loras/LTX-2.3-OmniNFT-RL-Lora_bf16.safetensors"
+    # v2 추가: 활성 상태(강도 1)인 필수 LoRA — Civitai 2349271, 받은 뒤 rename 필요 (아래)
+    "lora/Wan2.2/Breasts|https://civitai.com/api/download/models/2642369"
+    "lora/Wan2.2/Breasts|https://civitai.com/api/download/models/2642368"
+    # v2 추가: 강도 0이지만 검증 통과에 필요 — Civitai 2048082 (파일명 정확 일치)
+    "lora/Wan2.2|https://civitai.com/api/download/models/2317956"
+    "lora/Wan2.2|https://civitai.com/api/download/models/2318025"
+    # v2 추가: 우회(bypass) 노드용 — 켜고 싶을 때를 위해 받아둠. Civitai 2529707
+    "lora/LTX2.3/Beasts|https://civitai.com/api/download/models/2843106"
+    # --- vae ---
+    "vae/Wan2_1|https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+    "vae/LTX2/2.3|https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_video_vae_bf16.safetensors"
+    "vae/LTX2/2.3|https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors"
+    "vae/LTX2|https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors"
+    # --- esrgan (upscale_models) ---
+    "esrgan|https://huggingface.co/utnah/esrgan/resolve/main/2x_NMKD-UpgifLiteV2_210k.pth"
 )
 
-# diffusion_models (unet)
-UNET_MODELS=(
-    # Wan 2.2 I2V 14B — Dasiwa Lightspeed 머지 BoundBite v10 (HIGH/LOW 페어, 각 13.5GB, Civitai/NSFW)
-    "https://civitai.com/api/download/models/2761725"
-    "https://civitai.com/api/download/models/2761870"
-    # Wan 2.2 T2V low-noise 14B fp8 — 업스케일 리파이너용 (~13.4GB)
-    "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
-    # LTX-2.3 22B dev transformer fp8 (Kijai 분할판, 23.3GB)
-    "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/diffusion_models/ltx-2-3-22b-dev_transformer_only_fp8_input_scaled.safetensors"
+# ai-dock storage 맵에 없는 카테고리 → ComfyUI 폴더 직행
+COMFY_MODEL_ITEMS=(
+    "text_encoders/Wan2_1|https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    "text_encoders/LTX2|https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/gemma_3_12B_it_fp8_e4m3fn.safetensors"
+    "text_encoders/LTX2/2.3|https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/text_encoders/ltx-2.3_text_projection_bf16.safetensors"
+    "frame_interpolation|https://huggingface.co/Comfy-Org/frame_interpolation/resolve/main/frame_interpolation/rife_v4.26.safetensors"
 )
 
-LORA_MODELS=(
-    # SVI v2 PRO — 세그먼트 연속 생성 (HIGH/LOW, 각 1.23GB)
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors"
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_LOW_lora_rank_128_fp16.safetensors"
-    # rCM 증류 LoRA (HIGH, 0.59GB)
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/rCM/Wan22-I2V-A14B-HIGH-rCM6_0_lora_rank_64_bf16.safetensors"
-    # LTX-2.3 distilled LoRA 384 v1.1 — 비디오 0.38 / 오디오 0.7로 나눠 적용 (7.6GB)
-    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
-    # LTX-2.3 OmniNFT-RL LoRA (0.57GB)
-    "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/loras/LTX-2.3-OmniNFT-RL-Lora_bf16.safetensors"
-    # TODO(수동): "Big-breasted shakes_high_noise.safetensors" / "_low_noise" — Civitai에서
-    # 직접 검색 후 버전 URL을 여기에 추가. (검색 API 503으로 ID 미확보)
-    # "https://civitai.com/api/download/models/<HIGH_VERSION_ID>"
-    # "https://civitai.com/api/download/models/<LOW_VERSION_ID>"
-)
-
-VAE_MODELS=(
-    # Wan 2.1 VAE (Wan 단계 인코드/디코드)
-    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
-    # LTX-2.3 비디오/오디오 VAE + 프리뷰용 taeltx
-    "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_video_vae_bf16.safetensors"
-    "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors"
-    "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors"
-)
-
-ESRGAN_MODELS=(
-    # 2x 픽셀 업스케일러 (UltimateSDUpscale 1단)
-    "https://huggingface.co/utnah/esrgan/resolve/main/2x_NMKD-UpgifLiteV2_210k.pth"
-)
-
-CONTROLNET_MODELS=(
-)
-
-# 템플릿에 없는 카테고리 — provisioning_start에서 별도 호출
-TEXT_ENCODER_MODELS=(
-    # Wan용 UMT5-XXL fp8 (~6.7GB)
-    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
-    # LTX용 Gemma-3 12B fp8_e4m3fn (13.2GB) — 워크플로우가 참조하는 정확한 변환본
-    "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/gemma_3_12B_it_fp8_e4m3fn.safetensors"
-    # LTX-2.3 text projection (DualCLIPLoader 2번째 슬롯, 2.15GB)
-    "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/text_encoders/ltx-2.3_text_projection_bf16.safetensors"
-)
-
-FRAME_INTERPOLATION_MODELS=(
-    # RIFE 4.26 — comfy-core 내장 FrameInterpolate 노드용 (22.7MB)
-    "https://huggingface.co/Comfy-Org/frame_interpolation/resolve/main/frame_interpolation/rife_v4.26.safetensors"
+# Civitai가 주는 파일명 → 워크플로우가 참조하는 이름으로 변경
+# (형식: "폴더|원본이름|바꿀이름")
+RENAME_ITEMS=(
+    "lora/Wan2.2/Breasts|20260129-48585079_high_noise.safetensors|Big-breasted shakes_high_noise.safetensors"
+    "lora/Wan2.2/Breasts|20260129-48585079_low_noise.safetensors|Big-breasted shakes_low_noise.safetensors"
 )
 
 ### DO NOT EDIT BELOW HERE UNLESS YOU KNOW WHAT YOU ARE DOING ###
@@ -118,31 +94,32 @@ function provisioning_start() {
     provisioning_get_apt_packages
     provisioning_get_nodes
     provisioning_get_pip_packages
-    provisioning_get_models \
-        "${WORKSPACE}/storage/stable_diffusion/models/ckpt" \
-        "${CHECKPOINT_MODELS[@]}"
-    provisioning_get_models \
-        "${WORKSPACE}/storage/stable_diffusion/models/unet" \
-        "${UNET_MODELS[@]}"
-    provisioning_get_models \
-        "${WORKSPACE}/storage/stable_diffusion/models/lora" \
-        "${LORA_MODELS[@]}"
-    provisioning_get_models \
-        "${WORKSPACE}/storage/stable_diffusion/models/controlnet" \
-        "${CONTROLNET_MODELS[@]}"
-    provisioning_get_models \
-        "${WORKSPACE}/storage/stable_diffusion/models/vae" \
-        "${VAE_MODELS[@]}"
-    provisioning_get_models \
-        "${WORKSPACE}/storage/stable_diffusion/models/esrgan" \
-        "${ESRGAN_MODELS[@]}"
-    # ai-dock 스토리지 맵에 없는 카테고리는 ComfyUI 폴더에 직접 받는다
-    provisioning_get_models \
-        "/opt/ComfyUI/models/text_encoders" \
-        "${TEXT_ENCODER_MODELS[@]}"
-    provisioning_get_models \
-        "/opt/ComfyUI/models/frame_interpolation" \
-        "${FRAME_INTERPOLATION_MODELS[@]}"
+
+    local storage_base="${WORKSPACE}/ComfyUI/models"
+    for item in "${STORAGE_MODEL_ITEMS[@]}"; do
+        dir="${storage_base}/${item%%|*}"
+        url="${item#*|}"
+        mkdir -p "$dir"
+        printf "Downloading: %s -> %s\n" "$url" "$dir"
+        provisioning_download "$url" "$dir"
+    done
+
+    for item in "${COMFY_MODEL_ITEMS[@]}"; do
+        dir="/opt/ComfyUI/models/${item%%|*}"
+        url="${item#*|}"
+        mkdir -p "$dir"
+        printf "Downloading: %s -> %s\n" "$url" "$dir"
+        provisioning_download "$url" "$dir"
+    done
+
+    for item in "${RENAME_ITEMS[@]}"; do
+        IFS='|' read -r rel src dst <<< "$item"
+        if [[ -f "${storage_base}/${rel}/${src}" && ! -f "${storage_base}/${rel}/${dst}" ]]; then
+            mv "${storage_base}/${rel}/${src}" "${storage_base}/${rel}/${dst}"
+            printf "Renamed: %s -> %s\n" "$src" "$dst"
+        fi
+    done
+
     provisioning_print_end
 }
 
@@ -189,30 +166,6 @@ function provisioning_get_nodes() {
     done
 }
 
-function provisioning_get_default_workflow() {
-    if [[ -n $DEFAULT_WORKFLOW ]]; then
-        workflow_json=$(curl -s "$DEFAULT_WORKFLOW")
-        if [[ -n $workflow_json ]]; then
-            echo "export const defaultGraph = $workflow_json;" > /opt/ComfyUI/web/scripts/defaultGraph.js
-        fi
-    fi
-}
-
-function provisioning_get_models() {
-    if [[ -z $2 ]]; then return 1; fi
-
-    dir="$1"
-    mkdir -p "$dir"
-    shift
-    arr=("$@")
-    printf "Downloading %s model(s) to %s...\n" "${#arr[@]}" "$dir"
-    for url in "${arr[@]}"; do
-        printf "Downloading: %s\n" "${url}"
-        provisioning_download "${url}" "${dir}"
-        printf "\n"
-    done
-}
-
 function provisioning_print_header() {
     printf "\n##############################################\n#                                            #\n#          Provisioning container            #\n#                                            #\n#         This will take some time           #\n#                                            #\n# Your container will be ready on completion #\n#                                            #\n##############################################\n\n"
     if [[ $DISK_GB_ALLOCATED -lt $DISK_GB_REQUIRED ]]; then
@@ -232,7 +185,6 @@ function provisioning_has_valid_hf_token() {
         -H "Authorization: Bearer $HF_TOKEN" \
         -H "Content-Type: application/json")
 
-    # Check if the token is valid
     if [ "$response" -eq 200 ]; then
         return 0
     else
@@ -248,7 +200,6 @@ function provisioning_has_valid_civitai_token() {
         -H "Authorization: Bearer $CIVITAI_TOKEN" \
         -H "Content-Type: application/json")
 
-    # Check if the token is valid
     if [ "$response" -eq 200 ]; then
         return 0
     else
